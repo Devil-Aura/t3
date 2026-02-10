@@ -1,85 +1,73 @@
 import motor.motor_asyncio
-import asyncio
-from config import DB_URI, DB_NAME, OWNER_ID
+from config import DATABASE_URL, DATABASE_NAME
+from datetime import datetime
 
-client = motor.motor_asyncio.AsyncIOMotorClient(DB_URI)
-db = client[DB_NAME]
+client = motor.motor_asyncio.AsyncIOMotorClient(DATABASE_URL)
+db = client[DATABASE_NAME]
 
-# Collections
-col_users = db['users']
-col_channels = db['channels']
-col_settings = db['settings']
-col_admins = db['admins']
-col_broadcast = db['broadcast_state']
+col_users = db.users
+col_channels = db.channels
+col_settings = db.settings
+col_admins = db.admins
+col_links = db.links
 
 # --- Users ---
-async def add_user(user_id: int):
-    await col_users.update_one({'_id': user_id}, {'$set': {'_id': user_id}}, upsert=True)
+async def add_user(user_id):
+    await col_users.update_one({'id': user_id}, {'$set': {'id': user_id}}, upsert=True)
 
 async def get_all_users():
-    return [doc['_id'] async for doc in col_users.find({})]
+    return [x['id'] async for x in col_users.find({})]
 
-async def get_stats():
-    users = await col_users.count_documents({})
-    channels = await col_channels.count_documents({})
-    links = await col_channels.count_documents({}) * 3 # approx
-    return users, channels, links
+async def total_users_count():
+    return await col_users.count_documents({})
 
 # --- Admins ---
-async def add_admin_db(user_id: int):
-    await col_admins.update_one({'_id': user_id}, {'$set': {'_id': user_id}}, upsert=True)
+async def add_admin(user_id, name):
+    await col_admins.update_one({'id': user_id}, {'$set': {'id': user_id, 'name': name}}, upsert=True)
 
-async def del_admin_db(user_id: int):
-    await col_admins.delete_one({'_id': user_id})
+async def del_admin(user_id):
+    await col_admins.delete_one({'id': user_id})
 
-async def get_admins_list():
-    admins = [doc['_id'] async for doc in col_admins.find({})]
-    return admins
+async def get_admins():
+    return [x async for x in col_admins.find({})]
+
+async def is_admin(user_id):
+    from config import OWNER_ID
+    if user_id == OWNER_ID: return True
+    found = await col_admins.find_one({'id': user_id})
+    return bool(found)
+
+# --- Settings (Customization) ---
+async def get_setting(key, default=None):
+    doc = await col_settings.find_one({'type': 'config'})
+    if not doc: return default
+    return doc.get(key, default)
+
+async def update_setting(key, value):
+    await col_settings.update_one({'type': 'config'}, {'$set': {key: value}}, upsert=True)
 
 # --- Channels ---
-async def add_channel_db(anime_name, channel_id, primary_link):
+async def add_channel(anime_name, channel_id, primary_link):
     await col_channels.update_one(
         {'channel_id': channel_id},
-        {'$set': {
-            'anime_name': anime_name,
-            'channel_id': channel_id,
-            'primary_link': primary_link,
-            'search_name': anime_name.lower()
-        }},
+        {'$set': {'channel_id': channel_id, 'name': anime_name, 'primary_link': primary_link}},
         upsert=True
     )
 
-async def del_channel_db(channel_id):
+async def remove_channel(channel_id):
     await col_channels.delete_one({'channel_id': channel_id})
 
 async def get_channel_by_name(name):
-    return await col_channels.find_one({'search_name': {'$regex': name.lower()}})
-
-async def get_channel_by_id(channel_id):
-    return await col_channels.find_one({'channel_id': channel_id})
+    # Regex search for similar names
+    return [x async for x in col_channels.find({'name': {'$regex': name, '$options': 'i'}})]
 
 async def get_all_channels():
-    return col_channels.find({})
+    return [x async for x in col_channels.find({})]
 
-async def search_channels_db(query):
-    return col_channels.find({'search_name': {'$regex': query.lower()}})
+async def total_channels_count():
+    return await col_channels.count_documents({})
 
-# --- Settings (Customization) ---
-async def set_setting(key, value):
-    await col_settings.update_one({'key': key}, {'$set': {'value': value}}, upsert=True)
-
-async def get_setting(key, default=None):
-    doc = await col_settings.find_one({'key': key})
-    return doc['value'] if doc else default
-
-# Defaults
-async def init_settings():
-    # Set defaults if not exist
-    if not await get_setting('caption'):
-        await set_setting('caption', "Please Join The Channel By Clicking The Link Or Button And This Link Will Expire within few minutes.")
-    if not await get_setting('button_text'):
-        await set_setting('button_text', "⛩️ 𝗖𝗟𝗜𝗖𝗞 𝗛𝗘𝗥𝗘 𝗧𝗢 𝗝𝗢𝗜𝗇 ⛩️")
-    if not await get_setting('revoke_time'):
-        await set_setting('revoke_time', 1800) # 30 mins
-    if not await get_setting('fsub_msg'):
-        await set_setting('fsub_msg', "<b>ʀᴏᴋᴏ {first}!</b>\n\n<b>ᴛᴜᴍɴᴇ ᴀʙʜɪ ᴛᴀᴋ ʜᴀᴍᴀʀᴀ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟ ᴊᴏɪɴ ɴᴀʜɪɴ ᴋɪʏᴀ ʜᴀɪ!</b>\n<b><blockquote>ᴀɴɪᴍᴇ ᴋᴇ ᴇᴘɪꜱᴏᴅᴇꜱ ᴀᴜʀ ᴘᴜʀᴇ ᴀɴɪᴍᴇꜱ ʜɪɴᴅɪ ᴍᴇɪɴ ᴅᴇᴋʜɴᴇ ᴋᴇ ʟɪʏᴇ, ᴘᴇʜʟᴇ ʜᴀᴍᴀʀᴇ ᴄʜᴀɴɴᴇʟꜱ ᴊᴏɪɴ ᴋᴀʀɴᴀ ʜᴏɢᴀ।</b>\n<b>ꜱᴀʙ ᴄʜᴀɴɴᴇʟꜱ ᴊᴏɪɴ ᴋᴀʀɴᴇ ᴋᴇ ʙᴀᴀᴅ /start ʟɪᴋʜᴏ ᴀᴜʀ ᴍᴀᴢᴀ ʟᴜᴛᴏ!<blockquote>")
+# --- Links ---
+async def total_links_count():
+    # This is just a counter logic, or count documents in links collection
+    return await col_links.count_documents({})
